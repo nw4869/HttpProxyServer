@@ -3,6 +3,7 @@
 //
 
 #include "HttpProxyServer.h"
+#include "DataPipe.h"
 #include <iostream>
 #include <cstring>
 #include <netinet/in.h>
@@ -28,20 +29,18 @@ HttpProxyServer::~HttpProxyServer()
 
 }
 
-int HttpProxyServer::forwardRequest(const int connfd, const char *const request, const char *address, const int port)
+int HttpProxyServer::createConnection(const char *address, const int port)
 {
     int forwardFd;
     struct sockaddr_in forwardAddr;
     struct hostent *hptr;
-    char recvBuff[MAX_BUFF];
-    ssize_t nRead, nWrite;
 
     forwardFd = socket(AF_INET, SOCK_STREAM, 0);
 
     // get host
     if ((hptr = gethostbyname(address)) == NULL)
     {
-         // Resolve Error
+        // Resolve Error
         return -1;
     }
 
@@ -61,133 +60,92 @@ int HttpProxyServer::forwardRequest(const int connfd, const char *const request,
         // connect error
         return -3;
     }
-
-    nWrite = write(forwardFd, request, strlen(request));
-    cout << "wrote to forward: " << nWrite << endl;
-
-    for (; ;)
-    {
-        // read
-        if ((nRead = read(forwardFd, recvBuff, sizeof(recvBuff))) < 0)
-        {
-            if (errno == EINTR)
-            {
-                continue;
-            }
-            else
-            {
-                break;
-            }
-        }
-        else if (nRead == 0)
-        {
-            cout << "EOF" << endl;
-            break;      // EOF
-        }
-
-        cout << "read from forward: " << nRead << endl;
-        cout << "read:" << recvBuff << endl;
-
-        nWrite = write(connfd, recvBuff, (size_t) nRead);
-        cout << "wrote to client: " << nWrite << endl;
-    }
-
-    cout << "forwarded" << endl;
-    return 0;
+    return forwardFd;
 }
 
-int HttpProxyServer::parseAddrPort(const char *request, char *address, const size_t addrLen, int &port, int &isConnect)
+int HttpProxyServer::parseDestAddr(const char *line, char *destAddr, char *destPort, int &isConnect)
 {
-    std::istringstream requestStream(request);
-    string line, url;
-    unsigned long posStart, posDiv, posEnd;
+    int n;
 
-    std::getline(requestStream, line);
-    cout << "first line: " << line << endl;
-
-    if (!line.substr(0, 8).compare("CONNECT "))      //connect
+    if ( (n = sscanf(line, "CONNECT %255[^:]:%5s HTTP/", destAddr, destPort)) <= 0)
     {
-//        cout << "CONNECT!" << endl;
+        if ( (n = sscanf(line, "%*s %*[^:/]://%255[^:/]:%5[^:/] HTTP/", destAddr, destPort)) <= 0)
+        {
+            // not found
+            cout << "not found: " << line << endl;
+            return 0;
+        }
+        else
+        {
+            // found not 'connect'
+            if (n == 1)
+            {
+                strcpy(destPort, "80");
+            }
+            return 1;
+        }
+    }
+    else
+    {
+        // found 'connect'
+        if (n == 1)
+        {
+            strcpy(destPort, "443");
+        }
         isConnect = 1;
-        posStart = 8;
-
-        // find end pos
-        if ((posEnd = line.find(" ", posStart)) == string::npos)
-        {
-            return -2;
-        }
+        return 1;
     }
-    else
-    {
-//        cout << "Not Connect" << endl;
-
-        isConnect = 0;
-        // find start pos
-        if ((posStart = line.find("://")) == string::npos)
-        {
-            return -1;
-        }
-        posStart += 3;
-
-        // find end pos
-        if ( (posEnd = line.find("/", posStart)) == string::npos)
-        {
-            return -2;
-        }
-    }
-
-    url = line.substr(posStart, posEnd - posStart);
-//    cout << "url: " << url << endl;
-    if ((posDiv = url.find(":")) == string::npos)
-    {
-        // not found ':' --> use default port: 80
-        port = 80;
-    }
-    else
-    {
-        port = atoi(url.substr(posDiv + 1).c_str());
-    }
-
-    strncpy(address, url.substr(0, posDiv).c_str(), addrLen);
-    return 0;
 }
 
-void HttpProxyServer::processRequest(const int connfd, const char *request, int &isConnect)
+void HttpProxyServer::processProxy(int sourceFd, int destFd, int isConnect, const char *addition)
 {
-    char address[MAX_BUFF];
-    int port;
+    pid_t pid;
+    int n;
     const char *RESP_CONNECT = "HTTP/1.1 200 Connection Established\r\n\r\n";
 
-    cout << "start process request..." << endl;
-//    cout << "request:" << request << endl;
-
-    parseAddrPort(request, address, sizeof(address), port, isConnect);
-    cout << "target address: " << address << " port: " << port << endl;
-
-//    if (!strncmp(request, "CONNECT", 7))
-    if (isConnect)
+    if ((pid = fork()) == 0)
     {
-        // connect method is not implement
-        exit(1);
-
-//        write(connfd, RESP_CONNECT, sizeof(RESP_CONNECT));
-//        return ;
+//            cout << "client fd: " << connfd << " dest fd: " << destFd << endl;
+        DataPipe clientPipe(sourceFd);
+        if (isConnect)
+        {
+            n = clientPipe.pipe(destFd);
+        }
+        else
+        {
+            n = clientPipe.pipe(destFd, addition, strlen(addition));
+        }
+        cout << "bye: clientPipe rnt = " << n << endl;
+        exit(0);
     }
 
-    forwardRequest(connfd, request, address, port);
+    DataPipe destPipe(destFd);
+    if (isConnect)
+    {
+        n = destPipe.pipe(sourceFd, RESP_CONNECT, strlen(RESP_CONNECT));
+    }
+    else
+    {
+        n = destPipe.pipe(sourceFd);
+    }
+    cout << "bye: destPipe rnt = " << n  << endl;
+//        close(destFd);
+    shutdown(destFd, SHUT_RDWR);
+    kill(pid, SIGKILL);
 }
 
 int HttpProxyServer::processClient(int connfd)
 {
-    char ipbuff[INET_ADDRSTRLEN], recvbuff[MAX_BUFF], sendbuff[MAX_BUFF];
+    char ipbuff[INET_ADDRSTRLEN], recvbuff[MAX_BUFF], destAddr[256], destPort[6];
     struct sockaddr_in clientAddr;
-    int clientPort, isConnect = 0;
+    int destFd, clientPort, isConnect = 0, found = 0;
     socklen_t addrLen;
     char *ptr;
     ssize_t nRead;
     size_t nLeaf;
+    pid_t pid;
 
-    // get
+    // get client info
     addrLen = sizeof(clientAddr);
     getpeername(connfd, (struct sockaddr*)&clientAddr, &addrLen);
     inet_ntop(AF_INET, &clientAddr.sin_addr, ipbuff, sizeof(clientAddr));
@@ -197,7 +155,7 @@ int HttpProxyServer::processClient(int connfd)
 
     // read request
     ptr = recvbuff;
-    nLeaf = sizeof(recvbuff);
+    nLeaf = sizeof(recvbuff) - 1;
     while (nLeaf > 0)
     {
         if ( (nRead = read(connfd, ptr, nLeaf)) < 0)
@@ -221,34 +179,33 @@ int HttpProxyServer::processClient(int connfd)
         ptr += nRead;
         *ptr = 0;
 
-        // find request end flag (\r\n\r\n)
-        char *requestEnd = strstr(ptr - nRead, "\r\n\r\n");
-        if (requestEnd)
+        if (strstr(recvbuff, "\r\n"))
         {
-            cout << "found request end." << endl;
-            processRequest(connfd, recvbuff, isConnect);
+            if ((found = parseDestAddr(recvbuff, destAddr, destPort, isConnect)))
+            {
+                // found
+                break;
+            }
+        }
+    }
 
-            // clear buffer
-            ptr = recvbuff;
-            nLeaf = sizeof(recvbuff);
-            continue;
-        }
-        else
+    if (found)
+    {
+        if ((destFd = createConnection(destAddr, atoi(destPort))) < 0)
         {
-            cout << "not found request end" << endl;
+            return -1;
         }
+        cout << "connected: " << destAddr << ":" << destPort << endl;
+
+        processProxy(connfd, destFd, isConnect, recvbuff);
     }
 
     cout << "done." << endl << endl;
     return 0;
 }
 
-void HttpProxyServer::run(const string &address, const int port)
-{
-    int listenfd, connfd, reuse = 1;
-    socklen_t len;
-    struct sockaddr_in servaddr, cliaddr;
-    pid_t pid;
+void HttpProxyServer::createServerSocket(const string &address, const int port, int &listenfd, sockaddr_in &servaddr) const {
+    int reuse = 1;
 
     if ( (listenfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
     {
@@ -263,18 +220,11 @@ void HttpProxyServer::run(const string &address, const int port)
     bzero(&servaddr, sizeof(servaddr));
     servaddr.sin_family = AF_INET;
     servaddr.sin_port = htons(port);
-//    if (address != NULL)
+    if (!inet_pton(AF_INET, address.c_str(), &servaddr.sin_addr))
     {
-        if (!inet_pton(AF_INET, address.c_str(), &servaddr.sin_addr))
-        {
-            cerr << "listen ip address error" << endl;
-            exit(1);
-        }
+        cerr << "listen ip address error" << endl;
+        exit(1);
     }
-//    else
-//    {
-//        servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
-//    }
 
     if (bind(listenfd, (struct sockaddr*)&servaddr, sizeof(servaddr)) < 0)
     {
@@ -283,16 +233,35 @@ void HttpProxyServer::run(const string &address, const int port)
     }
 
     cout << "listening..." << endl;
-    if (listen(listenfd, this->listenQ) < 0)
+    if (listen(listenfd, listenQ) < 0)
     {
         cerr << "listen error" << endl;
         exit(1);
     }
+}
+
+void sigchld_handler(int signal)
+{
+    while (waitpid(-1, NULL, WNOHANG) > 0);
+}
+
+
+void HttpProxyServer::run(const string &address, const int port)
+{
+    int listenfd;
+    int connfd;
+    socklen_t len;
+    sockaddr_in servaddr, cliaddr;
+    pid_t pid;
+    createServerSocket(address, port, listenfd, servaddr);
+
+    signal(SIGCHLD, sigchld_handler); // 处理僵尸进程
+
 
     for (; ;)
     {
         len = sizeof(cliaddr);
-        if ( (connfd = accept(listenfd, (struct sockaddr*)&servaddr, &len)) < 0)
+        if ( (connfd = accept(listenfd, (struct sockaddr*)&cliaddr, &len)) < 0)
         {
             if (errno == EINTR)
             {

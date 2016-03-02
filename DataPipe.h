@@ -2,8 +2,8 @@
 // Created by Night Wind on 16/3/2.
 //
 
-#ifndef HTTPPROXYSERVER_SOCKETPIPE_H
-#define HTTPPROXYSERVER_SOCKETPIPE_H
+#ifndef HTTPPROXYSERVER_DATAPIPE_H
+#define HTTPPROXYSERVER_DATAPIPE_H
 
 
 #include <sys/types.h>
@@ -24,4 +24,4 @@ private:
 };
 
 
-#endif //HTTPPROXYSERVER_SOCKETPIPE_H
+#endif //HTTPPROXYSERVER_DATAPIPE_H

@@ -6,6 +6,7 @@
 #define HTTPPROXYSERVER_HTTPPROXYSERVER_H
 
 #include <iostream>
+#include <netinet/in.h>
 
 
 class HttpProxyServer {
@@ -24,11 +25,14 @@ private:
 
     int processClient(const int connfd);
 
-    void processRequest(const int connfd, const char *request, int &isConnect);
+    void createServerSocket(const std::string &address, const int port, int &listenfd, sockaddr_in &servaddr) const;
 
-    int parseAddrPort(const char *request, char *address, const size_t addrLen, int &port, int &isConnect);
+    int createConnection(const char *address, const int port);
 
-    int forwardRequest(const int connfd, const char *const request, const char* address, const int port);
+    int parseDestAddr(const char *line, char *destAddr, char *destPort, int &isConnect);
+
+    void processProxy(int sourceFd, int destFd, int isConnect, const char *addition);
+
 };
 
 

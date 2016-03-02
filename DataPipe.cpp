@@ -6,6 +6,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <sys/errno.h>
+#include <iostream>
 
 DataPipe::DataPipe(int sockfd): sockfd(sockfd) { }
 
@@ -23,6 +24,7 @@ ssize_t DataPipe::writen(int fd, const void *vptr, size_t n) {
             else
                 return(-1);			/* error */
         }
+//        std::cout << "written: " << nwritten << std::endl;
 
         nleft -= nwritten;
         ptr   += nwritten;
@@ -40,6 +42,7 @@ int DataPipe::pipe(const int destfd)
 
     for (; ;)
     {
+//        std::cout << "reading..." << sockfd << std::endl;
         if ( (nRead = read(sockfd, buff, sizeof(buff))) < 0)
         {
             if (errno == EINTR)
@@ -56,7 +59,8 @@ int DataPipe::pipe(const int destfd)
         {
             break;
         }
-        if (writen(destfd, buff, (size_t) nRead) < 0)
+//        std::cout << "read: " << nRead << std::endl;
+        if (writen(destfd, buff, (size_t) nRead) != nRead)
         {
             // 写入错误
             return -2;

@@ -3,7 +3,8 @@
 //
 
 #include "HttpProxyServer.h"
-#include "DataPipe.h"
+#include "datapipe/DefaultDataPipe.h"
+#include "datapipe/DataPipeAddition.h"
 #include <iostream>
 #include <cstring>
 #include <netinet/in.h>
@@ -13,6 +14,7 @@
 #include <signal.h>
 #include <sstream>
 #include <netdb.h>
+#include <sys/wait.h>
 
 using std::string;
 using std::cout;
@@ -105,31 +107,48 @@ void HttpProxyServer::processProxy(int sourceFd, int destFd, int isConnect, cons
 
     if ((pid = fork()) == 0)
     {
+        // 转发客户端数据到服务端
 //            cout << "client fd: " << connfd << " dest fd: " << destFd << endl;
-        DataPipe clientPipe(sourceFd);
+        DataPipe *clientPipe = nullptr;
+
         if (isConnect)
         {
-            n = clientPipe.pipe(destFd);
+            clientPipe = new DefaultDataPipe(sourceFd);
+            // CONNECT直接转发数据
         }
         else
         {
-            n = clientPipe.pipe(destFd, addition, strlen(addition));
+            //非CONNECT先发送预读数据,再进行转发
+            clientPipe = new DataPipeAddition(sourceFd, addition, strlen(addition));
         }
+        n = clientPipe->pipe(destFd);
+        delete clientPipe;
         cout << "bye: clientPipe rnt = " << n << endl;
+
+        // 若目标客户端关闭, 则关闭客户端读,服务器写
+        shutdown(sourceFd, SHUT_RD);
+        shutdown(destFd, SHUT_WR);
         exit(0);
     }
 
-    DataPipe destPipe(destFd);
+    // 转发服务端数据到客户端
+    DataPipe *destPipe = nullptr;
     if (isConnect)
     {
-        n = destPipe.pipe(sourceFd, RESP_CONNECT, strlen(RESP_CONNECT));
+        //CONNECT方法:先向客户端发送"连接建立",再转发数据
+        destPipe = new DataPipeAddition(destFd, RESP_CONNECT, strlen(RESP_CONNECT));
     }
     else
     {
-        n = destPipe.pipe(sourceFd);
+        //非CONNECT: 直接转发
+        destPipe = new DefaultDataPipe(destFd);
     }
+    n = destPipe->pipe(sourceFd);
+    delete destPipe;
     cout << "bye: destPipe rnt = " << n  << endl;
-//        close(destFd);
+
+    // 若服务端关闭, 则关闭目标服务端, 客户端写, 结束该子进程
+    shutdown(sourceFd, SHUT_WR);
     shutdown(destFd, SHUT_RDWR);
     kill(pid, SIGKILL);
 }
@@ -151,7 +170,8 @@ int HttpProxyServer::processClient(int connfd)
     inet_ntop(AF_INET, &clientAddr.sin_addr, ipbuff, sizeof(clientAddr));
     clientPort = ntohs(clientAddr.sin_port);
 
-    cout << "new connection: " << ipbuff << ":" << clientPort << endl;
+    cout << "[" << ipbuff << ":" << clientPort << "] "
+        << "connected!" << endl;
 
     // read request
     ptr = recvbuff;
@@ -166,14 +186,19 @@ int HttpProxyServer::processClient(int connfd)
             }
             else
             {
+                cout << "[" << ipbuff << ":" << clientPort << "] "
+                    << "first read error!" << endl;
                 break;
             }
         }
         else if (nRead == 0)
         {
+            cout << "[" << ipbuff << ":" << clientPort << "] "
+                << "first read EOF" << endl;
             break;      // EOF
         }
-        cout << "read:" << nRead << endl;
+        cout << "[" << ipbuff << ":" << clientPort << "] "
+             << "first read: " << nRead << endl;
 //        cout << "data:" << ptr << endl;
         nLeaf -= nRead;
         ptr += nRead;
@@ -181,26 +206,26 @@ int HttpProxyServer::processClient(int connfd)
 
         if (strstr(recvbuff, "\r\n"))
         {
-            if ((found = parseDestAddr(recvbuff, destAddr, destPort, isConnect)))
-            {
-                // found
-                break;
-            }
+            found = parseDestAddr(recvbuff, destAddr, destPort, isConnect);
+            break;
         }
     }
 
     if (found)
     {
+        // if found HTTP request
         if ((destFd = createConnection(destAddr, atoi(destPort))) < 0)
         {
             return -1;
         }
-        cout << "connected: " << destAddr << ":" << destPort << endl;
+        cout << "[" << ipbuff << ":" << clientPort << "] "
+            << "destination server connected: " << destAddr << ":" << destPort << endl;
 
         processProxy(connfd, destFd, isConnect, recvbuff);
     }
 
-    cout << "done." << endl << endl;
+    cout << "[" << ipbuff << ":" << clientPort << "] "
+            << " done." << endl << endl;
     return 0;
 }
 

@@ -2,15 +2,15 @@
 // Created by Night Wind on 16/3/2.
 //
 
-#include "DataPipe.h"
+#include "DefaultDataPipe.h"
 #include <sys/socket.h>
 #include <unistd.h>
 #include <sys/errno.h>
 #include <iostream>
 
-DataPipe::DataPipe(int sockfd): sockfd(sockfd) { }
+DefaultDataPipe::DefaultDataPipe(int srcFd): srcFd(srcFd) { }
 
-ssize_t DataPipe::writen(int fd, const void *vptr, size_t n) {
+ssize_t DefaultDataPipe::writen(int fd, const void *vptr, size_t n) {
     size_t		nleft;
     ssize_t		nwritten;
     const char	*ptr;
@@ -35,15 +35,15 @@ ssize_t DataPipe::writen(int fd, const void *vptr, size_t n) {
 /**
  * 将sockfd读到的数据写到destfd中,直到EOF或出错
  */
-int DataPipe::pipe(const int destfd)
+int DefaultDataPipe::pipe(const int dstFd)
 {
     char buff[65535];
     ssize_t nRead;
 
     for (; ;)
     {
-//        std::cout << "reading..." << sockfd << std::endl;
-        if ( (nRead = read(sockfd, buff, sizeof(buff))) < 0)
+//        std::cout << "reading..." << srcFd << std::endl;
+        if ((nRead = read(srcFd, buff, sizeof(buff))) < 0)
         {
             if (errno == EINTR)
             {
@@ -60,7 +60,7 @@ int DataPipe::pipe(const int destfd)
             break;
         }
 //        std::cout << "read: " << nRead << std::endl;
-        if (writen(destfd, buff, (size_t) nRead) != nRead)
+        if (writen(dstFd, buff, (size_t) nRead) != nRead)
         {
             // 写入错误
             return -2;
@@ -70,11 +70,6 @@ int DataPipe::pipe(const int destfd)
     return 0;
 }
 
-int DataPipe::pipe(const int destfd, const char *addition, size_t len) {
-    if (writen(destfd, addition, len) < 0)
-    {
-        // 写入错误
-        return -2;
-    }
-    return pipe(destfd);
+int DefaultDataPipe::getSrcFd() const {
+    return srcFd;
 }

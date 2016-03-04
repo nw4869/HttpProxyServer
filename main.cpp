@@ -1,13 +1,13 @@
 #include <iostream>
 #include "HttpProxyServer.h"
-#include "DataPipe.h"
+#include "datapipe/DefaultDataPipe.h"
 
 void test();
 
 using namespace std;
 
 int main() {
-    cout << "Hello, World!" << endl;
+    cout << "Hello Http Proxy Server!" << endl;
 
     HttpProxyServer server;
     server.run("0.0.0.0", 4869);

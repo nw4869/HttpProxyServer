@@ -5,6 +5,7 @@
 #include "HttpProxyServer.h"
 #include "datapipe/DefaultDataPipe.h"
 #include "datapipe/DataPipeAddition.h"
+#include "utils.h"
 #include <iostream>
 #include <cstring>
 #include <netinet/in.h>
@@ -99,8 +100,9 @@ int HttpProxyServer::parseDestAddr(const char *line, char *destAddr, char *destP
     }
 }
 
-void HttpProxyServer::processProxy(int sourceFd, int destFd, int isConnect, const char *addition)
+void HttpProxyServer::processProxy(int sourceFd, int destFd, int isConnect)
 {
+    char buff[MAX_BUFF];
     pid_t pid;
     int n;
     const char *RESP_CONNECT = "HTTP/1.1 200 Connection Established\r\n\r\n";
@@ -112,17 +114,7 @@ void HttpProxyServer::processProxy(int sourceFd, int destFd, int isConnect, cons
         // 转发客户端数据到服务端
 //            cout << "client fd: " << connfd << " dest fd: " << destFd << endl;
         DataPipe *clientPipe = nullptr;
-
-        if (isConnect)
-        {
-            clientPipe = new DefaultDataPipe(sourceFd);
-            // CONNECT直接转发数据
-        }
-        else
-        {
-            //非CONNECT先发送预读数据,再进行转发
-            clientPipe = new DataPipeAddition(sourceFd, addition, strlen(addition));
-        }
+        clientPipe = new DefaultDataPipe(sourceFd);
         n = clientPipe->pipe(destFd);
         delete clientPipe;
         cout << "bye: clientPipe rnt = " << n << endl;
@@ -135,15 +127,11 @@ void HttpProxyServer::processProxy(int sourceFd, int destFd, int isConnect, cons
 
     // 转发服务端数据到客户端
     DataPipe *destPipe = nullptr;
+    destPipe = new DefaultDataPipe(destFd);
     if (isConnect)
     {
-        //CONNECT方法:先向客户端发送"连接建立",再转发数据
-        destPipe = new DataPipeAddition(destFd, RESP_CONNECT, strlen(RESP_CONNECT));
-    }
-    else
-    {
-        //非CONNECT: 直接转发
-        destPipe = new DefaultDataPipe(destFd);
+        read(sourceFd, buff, sizeof(buff));
+        utils::writen(sourceFd, RESP_CONNECT, strlen(RESP_CONNECT));
     }
     n = destPipe->pipe(sourceFd);
     delete destPipe;
@@ -176,13 +164,11 @@ int HttpProxyServer::processClient(int connfd)
         << "connected!" << endl;
 
     // read request
-    ptr = recvbuff;
-    nLeaf = sizeof(recvbuff) - 1;
-    while (nLeaf > 0)
+    for (; ;)
     {
-        if ( (nRead = read(connfd, ptr, nLeaf)) < 0)
+        if ( (nRead = recv(connfd, recvbuff, sizeof(recvbuff) - 1, MSG_PEEK)) < 0)
         {
-            if (errno == EINTR)
+            if (errno == EINTR )
             {
                 continue;       // call read() again
             }
@@ -199,17 +185,18 @@ int HttpProxyServer::processClient(int connfd)
                 << "first read EOF" << endl;
             break;      // EOF
         }
-        cout << "[" << ipbuff << ":" << clientPort << "] "
-             << "first read: " << nRead << endl;
-//        cout << "data:" << ptr << endl;
-        nLeaf -= nRead;
-        ptr += nRead;
-        *ptr = 0;
-
-        if (strstr(recvbuff, "\r\n"))
+        else
         {
-            found = parseDestAddr(recvbuff, destAddr, destPort, isConnect);
-            break;
+            cout << "[" << ipbuff << ":" << clientPort << "] "
+            << "first read: " << nRead << endl;
+//        cout << "data:" << ptr << endl;
+            recvbuff[nRead] = 0;
+
+            if (strstr(recvbuff, "\r\n"))
+            {
+                found = parseDestAddr(recvbuff, destAddr, destPort, isConnect);
+                break;
+            }
         }
     }
 
@@ -223,7 +210,7 @@ int HttpProxyServer::processClient(int connfd)
         cout << "[" << ipbuff << ":" << clientPort << "] "
             << "destination server connected: " << destAddr << ":" << destPort << endl;
 
-        processProxy(connfd, destFd, isConnect, recvbuff);
+        processProxy(connfd, destFd, isConnect);
     }
 
     cout << "[" << ipbuff << ":" << clientPort << "] "

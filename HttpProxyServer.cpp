@@ -105,6 +105,8 @@ void HttpProxyServer::processProxy(int sourceFd, int destFd, int isConnect, cons
     int n;
     const char *RESP_CONNECT = "HTTP/1.1 200 Connection Established\r\n\r\n";
 
+    signal(SIGPIPE, SIG_IGN);
+
     if ((pid = fork()) == 0)
     {
         // 转发客户端数据到服务端

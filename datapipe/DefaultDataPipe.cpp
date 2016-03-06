@@ -8,7 +8,14 @@
 #include <sys/errno.h>
 #include <iostream>
 
-DefaultDataPipe::DefaultDataPipe(int srcFd): srcFd(srcFd) { }
+DefaultDataPipe::DefaultDataPipe(int srcFd): DefaultDataPipe(srcFd, 65535) { }
+
+DefaultDataPipe::DefaultDataPipe(const int srcFd, const size_t maxbuff)
+    : maxbuff(maxbuff), srcFd(srcFd) { }
+
+DefaultDataPipe::~DefaultDataPipe() {
+    delete [] buff;
+}
 
 ssize_t DefaultDataPipe::writen(int fd, const void *vptr, size_t n) {
     size_t		nleft;
@@ -37,7 +44,7 @@ ssize_t DefaultDataPipe::writen(int fd, const void *vptr, size_t n) {
  */
 int DefaultDataPipe::pipe(const int dstFd)
 {
-    char buff[65535];
+    char * buff = new char[maxbuff];
     ssize_t nRead;
 
     for (; ;)
@@ -60,13 +67,14 @@ int DefaultDataPipe::pipe(const int dstFd)
             break;
         }
 //        std::cout << "read: " << nRead << std::endl;
-        if (writen(dstFd, buff, (size_t) nRead) != nRead)
+        if (writen(dstFd, buff, (size_t) nRead) < 0)
         {
             // 写入错误
             return -2;
         }
     }
 
+    delete buff;
     return 0;
 }
 

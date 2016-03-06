@@ -14,6 +14,10 @@ class DefaultDataPipe: public DataPipe
 public:
     DefaultDataPipe(const int srcFd);
 
+    DefaultDataPipe(const int srcFd, const size_t maxbuff);
+
+    ~DefaultDataPipe();
+
     virtual int pipe(const int dstFd);
 
     virtual int getSrcFd() const;
@@ -23,6 +27,8 @@ protected:
 
 private:
     const int srcFd;
+    const size_t maxbuff;
+    char *buff;
 };
 
 

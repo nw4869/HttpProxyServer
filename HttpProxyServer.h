@@ -18,10 +18,7 @@ public:
 
     void run(const std::string &address, const int port);
 
-private:
-    static const int MAX_BUFF = 65535;
-    int listenQ = 1024;
-
+protected:
 
     int processClient(const int connfd);
 
@@ -31,8 +28,11 @@ private:
 
     int parseDestAddr(const char *line, char *destAddr, char *destPort, int &isConnect);
 
-    void processProxy(int sourceFd, int destFd, int isConnect, const char *addition);
+    void processProxy(int sourceFd, int destFd, int isConnect);
 
+private:
+    static const int MAX_BUFF = 65535;
+    int listenQ = 1024;
 };
 
 

@@ -50,7 +50,7 @@ int DefaultDataPipe::pipe(const int dstFd)
     for (; ;)
     {
 //        std::cout << "reading..." << srcFd << std::endl;
-        if ((nRead = read(srcFd, buff, sizeof(buff))) < 0)
+        if ((nRead = read(srcFd, buff, maxbuff)) < 0)
         {
             if (errno == EINTR)
             {
@@ -67,6 +67,7 @@ int DefaultDataPipe::pipe(const int dstFd)
             break;
         }
 //        std::cout << "read: " << nRead << std::endl;
+//        std::cout << "read: " << buff << std::endl;
         if (writen(dstFd, buff, (size_t) nRead) < 0)
         {
             // 写入错误

@@ -2,8 +2,8 @@
 // Created by nw4869 on 2016/3/6.
 //
 
-#include <sys/unistd.h>
 #include <sys/errno.h>
+#include <unistd.h>
 #include "utils.h"
 
 namespace utils

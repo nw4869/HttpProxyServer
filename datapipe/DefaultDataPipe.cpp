@@ -8,13 +8,15 @@
 #include <sys/errno.h>
 #include <iostream>
 
-DefaultDataPipe::DefaultDataPipe(int srcFd): DefaultDataPipe(srcFd, 65535) { }
-
 DefaultDataPipe::DefaultDataPipe(const int srcFd, const size_t maxbuff)
-    : maxbuff(maxbuff), srcFd(srcFd) { }
+    : maxbuff(maxbuff), srcFd(srcFd), buff(nullptr) { }
 
 DefaultDataPipe::~DefaultDataPipe() {
-    delete [] buff;
+    if (buff != nullptr)
+    {
+        delete [] buff;
+        buff = nullptr;
+    }
 }
 
 ssize_t DefaultDataPipe::writen(int fd, const void *vptr, size_t n) {
@@ -44,8 +46,9 @@ ssize_t DefaultDataPipe::writen(int fd, const void *vptr, size_t n) {
  */
 int DefaultDataPipe::pipe(const int dstFd)
 {
-    char * buff = new char[maxbuff];
+    buff = new char[maxbuff];
     ssize_t nRead;
+    int rtn = 0;
 
     for (; ;)
     {
@@ -59,7 +62,8 @@ int DefaultDataPipe::pipe(const int dstFd)
             else
             {
                 // 读取错误
-                return -1;
+                rtn = -1;
+                break;
             }
         }
         else if (nRead == 0)
@@ -71,12 +75,14 @@ int DefaultDataPipe::pipe(const int dstFd)
         if (writen(dstFd, buff, (size_t) nRead) < 0)
         {
             // 写入错误
-            return -2;
+            rtn = -2;
+            break;
         }
     }
 
-    delete buff;
-    return 0;
+    delete [] buff;
+    buff = nullptr;
+    return rtn;
 }
 
 int DefaultDataPipe::getSrcFd() const {

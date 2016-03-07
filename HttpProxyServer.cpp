@@ -113,10 +113,8 @@ void HttpProxyServer::processProxy(int sourceFd, int destFd, int isConnect)
     {
         // 转发客户端数据到服务端
 //            cout << "client fd: " << connfd << " dest fd: " << destFd << endl;
-        DataPipe *clientPipe = nullptr;
-        clientPipe = new DefaultDataPipe(sourceFd);
-        n = clientPipe->pipe(destFd);
-        delete clientPipe;
+        DefaultDataPipe clientPipe = DefaultDataPipe(sourceFd);
+        n = clientPipe.pipe(destFd);
         cout << "bye: clientPipe rnt = " << n << endl;
 
         // 若目标客户端关闭, 则关闭客户端读,服务器写
@@ -126,21 +124,19 @@ void HttpProxyServer::processProxy(int sourceFd, int destFd, int isConnect)
     }
 
     // 转发服务端数据到客户端
-    DataPipe *destPipe = nullptr;
-    destPipe = new DefaultDataPipe(destFd);
+    DefaultDataPipe destPipe = DefaultDataPipe(destFd);
     if (isConnect)
     {
         read(sourceFd, buff, sizeof(buff));
         utils::writen(sourceFd, RESP_CONNECT, strlen(RESP_CONNECT));
     }
-    n = destPipe->pipe(sourceFd);
-    delete destPipe;
+    n = destPipe.pipe(sourceFd);
     cout << "bye: destPipe rnt = " << n  << endl;
 
     // 若服务端关闭, 则关闭目标服务端, 客户端写, 结束该子进程
     shutdown(sourceFd, SHUT_WR);
     shutdown(destFd, SHUT_RDWR);
-    kill(pid, SIGKILL);
+    kill(pid, SIGTERM);
 }
 
 int HttpProxyServer::processClient(int connfd)

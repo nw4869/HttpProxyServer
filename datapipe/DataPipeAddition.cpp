@@ -33,6 +33,9 @@ DataPipeAddition::DataPipeAddition(const int srcFd, const char *addition, const 
 
 DataPipeAddition::~DataPipeAddition()
 {
-    delete [] addition;
-    addition = nullptr;
+    if (addition != nullptr)
+    {
+        delete [] addition;
+        addition = nullptr;
+    }
 }

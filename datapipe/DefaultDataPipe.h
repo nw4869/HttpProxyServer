@@ -12,9 +12,7 @@
 class DefaultDataPipe: public DataPipe
 {
 public:
-    DefaultDataPipe(const int srcFd);
-
-    DefaultDataPipe(const int srcFd, const size_t maxbuff);
+    DefaultDataPipe(const int srcFd, const size_t maxbuff=65535);
 
     ~DefaultDataPipe();
 

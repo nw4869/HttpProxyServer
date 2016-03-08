@@ -16,6 +16,8 @@
 #include <sstream>
 #include <netdb.h>
 #include <sys/wait.h>
+#include <sys/fcntl.h>
+#include <sys/epoll.h>
 
 using std::string;
 using std::cout;
@@ -102,6 +104,7 @@ int HttpProxyServer::parseDestAddr(const char *line, char *destAddr, char *destP
 
 void HttpProxyServer::processProxy(int sourceFd, int destFd, int isConnect)
 {
+    // TODO 完成非阻塞
     char buff[MAX_BUFF];
     pid_t pid;
     int n;
@@ -159,43 +162,16 @@ int HttpProxyServer::processClient(int connfd)
     cout << "[" << ipbuff << ":" << clientPort << "] "
         << "connected!" << endl;
 
-    // read request
-    for (; ;)
+    if ( (nRead = recv(connfd, recvbuff, sizeof(recvbuff) - 1, MSG_PEEK)) < 0)
     {
-        if ( (nRead = recv(connfd, recvbuff, sizeof(recvbuff) - 1, MSG_PEEK)) < 0)
-        {
-            if (errno == EINTR )
-            {
-                continue;       // call read() again
-            }
-            else
-            {
-                cout << "[" << ipbuff << ":" << clientPort << "] "
-                    << "first read error!" << endl;
-                break;
-            }
-        }
-        else if (nRead == 0)
-        {
-            cout << "[" << ipbuff << ":" << clientPort << "] "
-                << "first read EOF" << endl;
-            break;      // EOF
-        }
-        else
-        {
-            cout << "[" << ipbuff << ":" << clientPort << "] "
-            << "first read: " << nRead << endl;
-//        cout << "data:" << ptr << endl;
-            recvbuff[nRead] = 0;
-
-            if (strstr(recvbuff, "\r\n"))
-            {
-                found = parseDestAddr(recvbuff, destAddr, destPort, isConnect);
-                break;
-            }
-        }
+        perror("peek error");
+        return -1;
     }
 
+    recvbuff[nRead] = 0;
+    found = parseDestAddr(recvbuff, destAddr, destPort, isConnect);
+
+    // TODO 完成非阻塞connect
     if (found)
     {
         // if found HTTP request
@@ -214,40 +190,37 @@ int HttpProxyServer::processClient(int connfd)
     return 0;
 }
 
-void HttpProxyServer::createServerSocket(const string &address, const int port, int &listenfd, sockaddr_in &servaddr) const {
-    int reuse = 1;
+int HttpProxyServer::createServerSocket(const string &address, const int port) const {
+    int listenfd, reuse = 1;
+    struct sockaddr_in servaddr;
 
     if ( (listenfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
     {
-        cerr << "Listen error" << endl;
+        perror("Listen error");
         exit(1);
     }
     if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse)) < 0)
     {
         perror("setsockopt(SO_REUSEADDR) failed");
     }
+    setNonBlocking(listenfd);
 
     bzero(&servaddr, sizeof(servaddr));
     servaddr.sin_family = AF_INET;
     servaddr.sin_port = htons(port);
     if (!inet_pton(AF_INET, address.c_str(), &servaddr.sin_addr))
     {
-        cerr << "listen ip address error" << endl;
+        perror("listen ip address error");
         exit(1);
     }
 
     if (bind(listenfd, (struct sockaddr*)&servaddr, sizeof(servaddr)) < 0)
     {
-        cerr << "bind error" << endl;
+        perror("bind error");
         exit(1);
     }
 
-    cout << "listening..." << endl;
-    if (listen(listenfd, listenQ) < 0)
-    {
-        cerr << "listen error" << endl;
-        exit(1);
-    }
+    return listenfd;
 }
 
 void sigchld_handler(int signal)
@@ -259,40 +232,258 @@ void sigchld_handler(int signal)
 void HttpProxyServer::run(const string &address, const int port)
 {
     int listenfd;
-    int connfd;
-    socklen_t len;
-    sockaddr_in servaddr, cliaddr;
-    pid_t pid;
-    createServerSocket(address, port, listenfd, servaddr);
 
     signal(SIGCHLD, sigchld_handler); // 处理僵尸进程
 
+    listenfd = createServerSocket(address, port);
+    this->listenfd = listenfd;
+    cout << "listening..." << endl;
+    if (listen(listenfd, listenQ) < 0)
+    {
+        perror("listen error");
+        exit(1);
+    }
+    epollLoop(listenfd);
+    ::close(listenfd);
+}
+
+void HttpProxyServer::setNonBlocking(int sockFd) const
+{
+    int opts;
+
+    opts = fcntl(sockFd, F_GETFL);
+    if(opts < 0) {
+        perror("fcntl(F_GETFL)\n");
+        exit(1);
+    }
+    opts = (opts | O_NONBLOCK);
+    if(fcntl(sockFd, F_SETFL, opts) < 0) {
+        perror("fcntl(F_SETFL)\n");
+        exit(1);
+    }
+
+}
+
+void HttpProxyServer::readAndNotifyOtherSide(int epfd, struct epoll_event event, int fd,
+                                             HttpProxyServer::FdType type) {
+    ssize_t nread;
+    struct epoll_event ev;
+    ProxyConn *proxyConn = nullptr;
+    ssize_t (*readFunc)();
+
+    proxyConn = getProxyConn(fd);
+    if (type == SRC)
+    {
+         readFunc = proxyConn->readSrc;
+    }
+    else
+    {
+        readFunc = proxyConn->readDst;
+    }
+    while ( (nread = readFunc()) > 0)
+    {
+    }
+    if (nread == ProxyConn::ERR_BUFF_FULL)
+    {
+        // BUFF 满了,下次继续读
+        ev.events = event.events | EPOLLIN;
+        ev.data.fd = fd;
+        if (epoll_ctl(epfd, EPOLL_CTL_MOD, fd, &ev) == -1)
+        {
+            perror("epoll_ctl: mod");
+        }
+    }
+    else if (nread == 0 || (nread == -1 && errno != EWOULDBLOCK))
+    {
+        // EOF 或者 读取出错
+        close(proxyConn);
+    }
+
+    // 添加EPOLLOUT, 下次写到目标服务器
+    ev.events = event.events | EPOLLOUT;
+    ev.data.fd = getOtherSideFd(fd);
+    if (epoll_ctl(epfd, EPOLL_CTL_MOD, getOtherSideFd(fd), &ev) == -1)
+    {
+        perror("epoll_ctl: mod");
+    }
+}
+
+void HttpProxyServer::doRead(int epfd, struct epoll_event event, int fd, FdType type)
+{
+    cout << "doRead(" <<  epfd << ", " << fd << ")" << endl;
+
+    if (type == UNKNOWN)
+    {
+        processClient(fd);
+    }
+    else
+    {
+        readAndNotifyOtherSide(epfd, event, fd, type);
+    }
+
+}
+
+void HttpProxyServer::doWrite(int epfd, struct epoll_event event, int fd, FdType type)
+{
+    char buff[MAX_BUFF];
+    ssize_t len, nwrite, totalWrite;
+
+    cout << "doWrite(" <<  epfd << ", " << fd << ")" << endl;
+
+    // TODO 完成doWrite函数
+
+    snprintf(buff, MAX_BUFF, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\nHello World", 11);
+    len = strlen(buff);
+    totalWrite = 0;
+    while (totalWrite < len)
+    {
+        nwrite = write(fd, buff + totalWrite, (size_t) (len - totalWrite));
+        if (nwrite != len - totalWrite)
+        {
+            if (nwrite == -1 && errno != EWOULDBLOCK)
+            {
+                perror("write error");
+            }
+            break;
+        }
+        totalWrite += nwrite;
+    }
+    ::close(fd);
+}
+
+void HttpProxyServer::handleAccept(int epfd, int listenfd) {
+    struct sockaddr_in cliaddr;
+    struct epoll_event ev;
+    int connfd;
+    socklen_t len;
+
+    while (len = sizeof(cliaddr), (connfd = accept(listenfd, (struct sockaddr*)&cliaddr, &len)) > 0)
+    {
+        setNonBlocking(connfd);
+        ev.events = EPOLLIN | EPOLLET;
+        ev.data.fd = connfd;
+        if (epoll_ctl(epfd, EPOLL_CTL_ADD, connfd, &ev) == -1)
+        {
+            perror("epoll_ctl:add");
+            exit(EXIT_FAILURE);
+        }
+    }
+    if (connfd == -1)
+    {
+        if (errno != EAGAIN && errno != ECONNABORTED
+            && errno != EPROTO && errno != EINTR)
+            perror("accept");
+    }
+}
+
+void HttpProxyServer::epollLoop(int listenfd)
+{
+    struct epoll_event ev, events[MAX_EVENTS];
+    int epfd, nfds, fd, i;
+
+    // epoll create
+    epfd = epoll_create(MAX_EVENTS);
+    this->epfd = epfd;
+    if (epfd == -1) {
+        perror("epoll_create");
+        exit(EXIT_FAILURE);
+    }
+
+    // add listenfd to epoll
+    ev.events = EPOLLIN;
+    ev.data.fd = listenfd;
+    if (epoll_ctl(epfd, EPOLL_CTL_ADD, listenfd, &ev) == -1) {
+        perror("epoll_ctl: listen_sock");
+        exit(EXIT_FAILURE);
+    }
 
     for (; ;)
     {
-        len = sizeof(cliaddr);
-        if ( (connfd = accept(listenfd, (struct sockaddr*)&cliaddr, &len)) < 0)
+        nfds = epoll_wait(epfd, events, MAX_EVENTS, -1);
+        if (nfds == -1)
         {
-            if (errno == EINTR)
-            {
-                continue;
-            }
-            else
-            {
-                cerr << "accept error" << endl;
-                exit(1);
-            }
+            perror("epoll_pwait");
+            exit(EXIT_FAILURE);
         }
 
-        if ((pid = fork()) == 0)
-        {
-//            kill(0, SIGSTOP);     // for debug
-            close(listenfd);
-            processClient(connfd);
-            close(connfd);
-            exit(0);
-        }
-        close(connfd);
+        handleEvents(epfd, events, listenfd, nfds);
     }
-    close(listenfd);
+    ::close(epfd);
+}
+
+void HttpProxyServer::handleEvents(int epfd, struct epoll_event *events, int listenfd, int nfds) {
+    int i, fd;
+
+    for (i = 0; i < nfds; ++i)
+        {
+            fd = events[i].data.fd;
+            if (fd == listenfd)
+            {
+                handleAccept(epfd, listenfd);
+                continue;
+            }
+            if (events[i].events & EPOLLIN)
+            {
+                doRead(epfd, events[i], fd, fdTypeMap[fd]);
+            }
+            if (events[i].events & EPOLLOUT)
+            {
+                doWrite(epfd, events[i], fd, fdTypeMap[fd]);
+            }
+        }
+}
+
+void HttpProxyServer::setupFdPair(int srcFd, int dstFd)
+{
+    fdTypeMap[srcFd] = SRC;
+    fdTypeMap[dstFd] = DST;
+    src2DstMap[srcFd] = dstFd;
+    dst2SrcMap[dstFd] = srcFd;
+    srcFd2ProxyConnMap[srcFd] = new ProxyConn(srcFd, dstFd);
+}
+
+void HttpProxyServer::close(ProxyConn *proxyConn)
+{
+    fdTypeMap.erase(proxyConn->getSrcFd());
+    fdTypeMap.erase(proxyConn->getDstFd());
+    src2DstMap.erase(proxyConn->getSrcFd());
+    dst2SrcMap.erase(proxyConn->getDstFd());
+    srcFd2ProxyConnMap.erase(proxyConn->getSrcFd());
+    // 描述中close后, 自动在epoll中移除
+    proxyConn->closeAll();
+    delete proxyConn;
+}
+
+int HttpProxyServer::getOtherSideFd(int fd) const
+{
+    FdType type;
+    if ((type = fdTypeMap[fd]) == SRC)
+    {
+        return src2DstMap[fd];
+    }
+    else if (type == DST)
+    {
+        return dst2SrcMap[fd];
+    }
+    else
+    {
+        return -1;
+    }
+}
+
+ProxyConn *HttpProxyServer::getProxyConn(int fd)
+{
+    FdType type;
+    if ((type = fdTypeMap[fd]) == SRC)
+    {
+        return srcFd2ProxyConnMap[fd];
+    }
+    else if (type == DST)
+    {
+        return srcFd2ProxyConnMap[getOtherSideFd(fd)];
+    }
+    else
+    {
+        return nullptr;
+    }
 }

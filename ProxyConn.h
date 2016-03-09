@@ -10,7 +10,11 @@
 struct ProxyConn
 {
 public:
-    ProxyConn(const int srcFd, const int dstFd, const size_t maxBuff=8192);
+    enum FdType {UNKNOWN, SRC, DST};
+    enum ConnType {HTTP, HTTPS};
+
+public:
+    ProxyConn(const int srcFd, const int dstFd, const ConnType connType=HTTP, const size_t maxBuff=8192);
 
     virtual ~ProxyConn();
 
@@ -28,6 +32,18 @@ public:
 
     virtual void closeAll();
 
+    virtual size_t getRecvLen() const;
+
+    virtual size_t getSendLen() const;
+
+    virtual int isDstReady() const;
+
+    virtual void setDstReady(int ready);
+
+    virtual ConnType getConnType() const;
+
+    virtual void setConnType(ConnType type);
+
 protected:
     virtual ssize_t read(FdType type);
 
@@ -35,11 +51,9 @@ protected:
 
 public:
     static const int ERR_BUFF_FULL = -2;
-    static const int ERR_BUFF_EMPTY = -3;
     const size_t MAX_BUFF;
 
 private:
-    enum FdType {UNKNOWN, SRC, DST} ;
 
     const int srcFd;
     const int dstFd;
@@ -47,6 +61,9 @@ private:
     char *sendBuff;
     size_t recvLen;
     size_t sendLen;
+
+    int dstReady;
+    ConnType connType;
 };
 
 

@@ -13,6 +13,8 @@
 
 
 class HttpProxyServer {
+private:
+    enum FdType {UNKNOWN, SRC, DST} ;
 
 public:
     HttpProxyServer();
@@ -23,11 +25,11 @@ public:
 
 protected:
 
-    int processClient(const int connfd);
+    int processClient(const int srcFd);
 
     int createServerSocket(const std::string &address, const int port) const;
 
-    int createConnection(const char *address, const int port);
+    int createConnection(int fd, const char *address, const int port);
 
     int parseDestAddr(const char *line, char *destAddr, char *destPort, int &isConnect);
 
@@ -40,34 +42,31 @@ private:
 
     void doWrite(int epfd, struct epoll_event event, int fd, FdType type);
 
-    void readAndNotifyOtherSide(int epfd, struct epoll_event event, int fd, FdType);
-
     void handleAccept(int epfd, int listenfd);
 
     void epollLoop(int listenfd);
 
-    ProxyConn* getProxyConn(int fd);
+    ProxyConn* getProxyConn(int fd) const;
 
     int getOtherSideFd(int fd) const;
 
-    void setupFdPair(int srcFd, int dstFd);
+    ProxyConn * setupFdPair(int srcFd, int dstFd);
 
     void close(ProxyConn *proxyConn);
 
     void handleEvents(int epfd, epoll_event *events, int listenfd, int nfds);
 
+    FdType getFdType(int fd) const;
+
 private:
-    enum FdType {UNKNOWN, SRC, DST} ;
     static const int MAX_BUFF = 8192;
     static const int MAX_EVENTS = 10;
     int listenQ = 1024;
 
     int epfd;
     int listenfd;
-    std::map<int, int> src2DstMap;
-    std::map<int, int> dst2SrcMap;
-    std::map<int, FdType> fdTypeMap;
     std::map<int, ProxyConn*> srcFd2ProxyConnMap;
+    std::map<int, ProxyConn*> dstFd2ProxyConnMap;
 };
 
 

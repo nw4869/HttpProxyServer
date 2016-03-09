@@ -5,7 +5,8 @@
 #include "ProxyConn.h"
 #include "unistd.h"
 
-ProxyConn::ProxyConn(int srcFd, int dstFd, size_t maxBuff) : srcFd(srcFd), dstFd(dstFd), MAX_BUFF(maxBuff)
+ProxyConn::ProxyConn(int srcFd, int dstFd, ConnType connType, size_t maxBuff)
+        : srcFd(srcFd), dstFd(dstFd), connType(connType), MAX_BUFF(maxBuff), dstReady(0)
 {
     recvBuff = new char[MAX_BUFF];
     sendBuff = new char[MAX_BUFF];
@@ -68,10 +69,6 @@ ssize_t ProxyConn::write(FdType type)
         buff = sendBuff;
     }
 
-    if (len == 0)
-    {
-        return ERR_BUFF_EMPTY;
-    }
     if ( (n = ::write(fd, buff, *len)) > 0)
     {
         *len -= n;
@@ -103,4 +100,33 @@ int ProxyConn::getSrcFd() const
 int ProxyConn::getDstFd() const
 {
     return 0;
+}
+
+size_t ProxyConn::getRecvLen() const {
+    return recvLen;
+}
+
+size_t ProxyConn::getSendLen() const
+{
+    return sendLen;
+}
+
+int ProxyConn::isDstReady() const {
+    return dstReady;
+}
+
+
+void ProxyConn::setDstReady(int ready)
+{
+    dstReady = ready;
+}
+
+ProxyConn::ConnType ProxyConn::getConnType() const
+{
+    return connType;
+}
+
+void ProxyConn::setConnType(ProxyConn::ConnType type)
+{
+    connType = type;
 }

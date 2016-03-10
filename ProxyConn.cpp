@@ -5,11 +5,20 @@
 #include "ProxyConn.h"
 #include "unistd.h"
 
+#include <iostream>
+#include <string.h>
+#include <algorithm>
+
 ProxyConn::ProxyConn(int srcFd, int dstFd, ConnType connType, size_t maxBuff)
         : srcFd(srcFd), dstFd(dstFd), connType(connType), MAX_BUFF(maxBuff), dstReady(0)
 {
     recvBuff = new char[MAX_BUFF];
     sendBuff = new char[MAX_BUFF];
+
+    if (connType == HTTPS)
+    {
+        initHttpsConn();
+    }
 }
 
 ProxyConn::~ProxyConn()
@@ -18,6 +27,24 @@ ProxyConn::~ProxyConn()
     delete [] sendBuff;
     recvBuff = nullptr;
     sendBuff = nullptr;
+}
+
+int ProxyConn::initHttpsConn()
+{
+    // 返回源端 HTTP/1.1 200 Connection Established
+    if (strlen(RESP_CONNECT) <= MAX_BUFF)
+    {
+        sendLen = strlen(RESP_CONNECT);
+        strncpy(sendBuff, RESP_CONNECT, sendLen);
+        std::cout << "HTTPS: sendbuf init to " << sendBuff << std::endl;
+    }
+    else
+    {
+        //buff 不够
+        std::cerr << "strlen(RESP_CONNECT) > MAX_BUFF" << std::endl;
+        return -1;
+    }
+    return 0;
 }
 
 ssize_t ProxyConn::read(FdType type)
@@ -41,6 +68,8 @@ ssize_t ProxyConn::read(FdType type)
     if ( (n = ::read(fd, buff + *len, MAX_BUFF - *len))  > 0)
     {
         *len += n;
+        std::string s(buff, std::min(*len, (size_t)256));
+        std::cout << "read: " << s << std::endl;
     }
     return n;
 }
@@ -62,7 +91,7 @@ ssize_t ProxyConn::write(FdType type)
     size_t *len = &recvLen;
     char *buff = recvBuff;
 
-    if (type == DST)
+    if (type == SRC)
     {
         fd = srcFd;
         len = &sendLen;
@@ -72,6 +101,8 @@ ssize_t ProxyConn::write(FdType type)
     if ( (n = ::write(fd, buff, *len)) > 0)
     {
         *len -= n;
+        std::string s(buff, std::min(*len, (size_t)256));
+        std::cout << "write: " << s << std::endl;
     }
     return n;
 }
@@ -94,12 +125,12 @@ void ProxyConn::closeAll()
 
 int ProxyConn::getSrcFd() const
 {
-    return 0;
+    return srcFd;
 }
 
 int ProxyConn::getDstFd() const
 {
-    return 0;
+    return dstFd;
 }
 
 size_t ProxyConn::getRecvLen() const {
@@ -129,4 +160,8 @@ ProxyConn::ConnType ProxyConn::getConnType() const
 void ProxyConn::setConnType(ProxyConn::ConnType type)
 {
     connType = type;
+    if (connType == HTTPS)
+    {
+        initHttpsConn();
+    }
 }

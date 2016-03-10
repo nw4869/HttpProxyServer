@@ -38,9 +38,9 @@ protected:
 private:
     void setNonBlocking(int sockFd) const;
 
-    void doRead(int epfd, struct epoll_event event, int fd, FdType type);
+    int doRead(int epfd, struct epoll_event event, int fd, FdType type);
 
-    void doWrite(int epfd, struct epoll_event event, int fd, FdType type);
+    int doWrite(int epfd, struct epoll_event event, int fd, FdType type);
 
     void handleAccept(int epfd, int listenfd);
 

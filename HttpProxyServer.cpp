@@ -108,12 +108,30 @@ void HttpProxyServer::processProxy(int sourceFd, int destFd, int isConnect)
     struct epoll_event ev;
     ProxyConn *proxyConn;
 
+    ev.events = EPOLLOUT | EPOLLET;
+    ev.data.fd = destFd;
     if (epoll_ctl(epfd, EPOLL_CTL_ADD, destFd, &ev) == -1) {
         perror("epoll_ctl: add");
     }
 
+    cout << "setup fd pair: " << sourceFd << " <--> " << destFd << endl;
     proxyConn = setupFdPair(sourceFd, destFd);
     proxyConn->setConnType(isConnect ? ProxyConn::HTTPS : ProxyConn::HTTP);
+    
+    if (isConnect)
+    {
+        // 需要返回源端 HTTP/1.1 200 Connection Established, 所以将src监听写
+        ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
+        ev.data.fd = sourceFd;
+        if (epoll_ctl(epfd, EPOLL_CTL_MOD, sourceFd, &ev) == -1) {
+            perror("epoll_ctl: mod");
+        }
+        // 取出刚才peek的，CONNECT请求
+        char buff[256];
+        while (read(sourceFd, buff, 256) > 0)
+        {
+        }
+    }
 }
 
 int HttpProxyServer::processClient(int srcFd)
@@ -151,16 +169,24 @@ int HttpProxyServer::processClient(int srcFd)
             perror("create dst socket error");
             return -2;
         }
+        setNonBlocking(dstFd);
+        cout << "try to connect: " << destAddr << ":" << destPort << endl;
         if (( (n = createConnection(dstFd, destAddr, atoi(destPort))) < 0 && n != -3)
             ||  (n == -3 && errno != EINPROGRESS))
         {
             perror("create dst connection");
+            cerr << "createConnection() return: " << n << endl;
+            ::close(dstFd);
             return -3;
         }
-        cout << "[" << ipbuff << ":" << clientPort << "] "
-            << "destination server connected: " << destAddr << ":" << destPort << endl;
+        // cout << "[" << ipbuff << ":" << clientPort << "] "
+        //     << "destination server connected: " << destAddr << ":" << destPort << endl;
 
         processProxy(srcFd, dstFd, isConnect);
+    }
+    else
+    {
+        return -4;
     }
 
     cout << "[" << ipbuff << ":" << clientPort << "] "
@@ -242,18 +268,21 @@ void HttpProxyServer::setNonBlocking(int sockFd) const
 
 }
 
-void HttpProxyServer::doRead(int epfd, struct epoll_event event, int fd, FdType type)
+int HttpProxyServer::doRead(int epfd, struct epoll_event event, int fd, FdType type)
 {
     ssize_t nread, totalRead;
     struct epoll_event ev;
     ProxyConn *proxyConn = nullptr;
 
-    cout << "doRead(" <<  epfd << ", " << fd << ")" << endl;
-
     if (type == UNKNOWN)
     {
         // 处理新连接
-        processClient(fd);
+        cout << "handle new conn" << endl;
+        if (processClient(fd) < 0)
+        {
+            // ::close(fd);
+            return -1;
+        }
     }
     else
     {
@@ -273,6 +302,7 @@ void HttpProxyServer::doRead(int epfd, struct epoll_event event, int fd, FdType 
                 totalRead += nread;
             }
         }
+        cout << "total read: " << totalRead << endl;
         if (nread == ProxyConn::ERR_BUFF_FULL)
         {
             // BUFF满了,下次继续读, 由对端进行"写"后唤醒
@@ -284,10 +314,12 @@ void HttpProxyServer::doRead(int epfd, struct epoll_event event, int fd, FdType 
 //                perror("epoll_ctl: mod");
 //            }
         }
-        else if (nread == 0 || (nread == -1 && errno != EWOULDBLOCK))
+        else if (nread == -1 && errno != EWOULDBLOCK)
         {
-            // EOF 或者 读取出错
-            close(proxyConn);
+            // 读取出错
+            perror("read");
+            // close(proxyConn);
+            return -1;
         }
 
         if (totalRead > 0)
@@ -300,19 +332,22 @@ void HttpProxyServer::doRead(int epfd, struct epoll_event event, int fd, FdType 
                 perror("epoll_ctl: mod");
             }
         }
+        if (nread == 0)
+        {
+            // EOF
+            cout << "EOF" << endl;
+            return -1;
+        }
     }
-
+    return 0;
 }
 
-void HttpProxyServer::doWrite(int epfd, struct epoll_event event, int fd, FdType type)
+int HttpProxyServer::doWrite(int epfd, struct epoll_event event, int fd, FdType type)
 {
-    const char *RESP_CONNECT = "HTTP/1.1 200 Connection Established\r\n\r\n";
     ssize_t nwrite, totalWrite;
     struct epoll_event ev;
     ProxyConn* proxyConn = nullptr;
     int isNewConn;
-
-    cout << "doWrite(" <<  epfd << ", " << fd << ")" << endl;
 
     totalWrite = 0;
     isNewConn = 0;
@@ -321,30 +356,22 @@ void HttpProxyServer::doWrite(int epfd, struct epoll_event event, int fd, FdType
     // 处理新的对端连接响应
     if (type == DST && !proxyConn->isDstReady())
     {
+        cout << "handle new connection result" << endl;
         isNewConn = 1;
         if (event.events & EPOLLERR)    //连接失败
         {
             cerr << "connect dst failed" << endl;
-            close(proxyConn);
-            return ;
+            // close(proxyConn);
+            return -1;
         }
 
         // 连接成功
         cout << "dst connect success" << endl;
         proxyConn->setDstReady(1);
-        if (proxyConn->getConnType() == ProxyConn::HTTPS)
-        {
-            // 返回源端 HTTP/1.1 200 Connection Established
-            if (::write(proxyConn->getSrcFd(), RESP_CONNECT, strlen(RESP_CONNECT)) < 0)
-            {
-                close(proxyConn);
-                return;
-            }
-        }
     }
-    else
-    {
-        // 处理已经建立连接完成的情况
+    //else
+    //{
+    //    // 处理已经建立连接完成的情况, 
         totalWrite = 0;
         if (type == SRC)
         {
@@ -360,20 +387,21 @@ void HttpProxyServer::doWrite(int epfd, struct epoll_event event, int fd, FdType
                 totalWrite += nwrite;
             }
         }
-
+        cout << "totalWrite: "  << totalWrite << endl;
         if (nwrite == -1 && errno != EWOULDBLOCK)
         {
             // 出错
-            close(proxyConn);
-            return ;
+            // close(proxyConn);
+            return -1;
         }
-    }
+    //}
 
     if (totalWrite > 0 || isNewConn)
     {
         //对端添加监听"读"
         ev.events = event.events | EPOLLIN | EPOLLET;
         ev.data.fd = getOtherSideFd(fd);
+        cout << "otherSideFd: " << fd << " -> " <<ev.data.fd << endl;
         if (epoll_ctl(epfd, EPOLL_CTL_MOD, getOtherSideFd(fd), &ev) == -1)
         {
             perror("epoll_ctl: mod");
@@ -386,6 +414,7 @@ void HttpProxyServer::doWrite(int epfd, struct epoll_event event, int fd, FdType
             perror("epoll_ctl: mod");
         }
     }
+    return 0;
 }
 
 void HttpProxyServer::handleAccept(int epfd, int listenfd) {
@@ -411,6 +440,7 @@ void HttpProxyServer::handleAccept(int epfd, int listenfd) {
             && errno != EPROTO && errno != EINTR)
             perror("accept");
     }
+    cout << "accept new fd: " << connfd << endl;
 }
 
 void HttpProxyServer::epollLoop(int listenfd)
@@ -449,25 +479,83 @@ void HttpProxyServer::epollLoop(int listenfd)
 }
 
 void HttpProxyServer::handleEvents(int epfd, struct epoll_event *events, int listenfd, int nfds) {
-    int i, fd;
-
+    int i, fd, occErr;
+    FdType fdType;
+    std::map<int, FdType> endFdTypeMap;
     for (i = 0; i < nfds; ++i)
+    {
+        occErr = 0;
+        fd = events[i].data.fd;
+        cout << endl << "*handle fd " << fd << " begin: events = " <<  events[i].events << ", type = "
+            << getFdType(fd) << endl;
+        if (fd == listenfd)
         {
-            fd = events[i].data.fd;
-            if (fd == listenfd)
+            cout << "handle accept" << endl;
+            handleAccept(epfd, listenfd);
+            continue;
+        }
+        if (events[i].events & EPOLLERR)
+        {
+            cerr << "EPOLLERR" << endl;
+            endFdTypeMap[fd] = fdType;
+            occErr = 1;
+        }
+        if (events[i].events & EPOLLIN && !occErr && !endFdTypeMap.count(fd))
+        {
+            fdType = getFdType(fd);
+            cout << "handle read" << endl;
+            if ( (occErr = doRead(epfd, events[i], fd, fdType)) < 0)
             {
-                handleAccept(epfd, listenfd);
-                continue;
-            }
-            if (events[i].events & EPOLLIN)
-            {
-                doRead(epfd, events[i], fd, getFdType(fd));
-            }
-            if (events[i].events & EPOLLOUT)
-            {
-                doWrite(epfd, events[i], fd, getFdType(fd));
+                if (fdType == UNKNOWN)
+                {
+                    ::close(fd);
+                    cout << "close new fd: " << fd << endl;
+                }
+                else
+                {
+                    endFdTypeMap[fd] = fdType;
+                }
             }
         }
+        if (events[i].events & EPOLLOUT && !occErr && !endFdTypeMap.count(fd))
+        {
+            fdType = getFdType(fd);
+            cout << "handle write" << endl;
+            if (doWrite(epfd, events[i], fd, fdType) < 0)
+            {
+                endFdTypeMap[fd] = fdType;
+            }
+        }
+        cout << "*handle fd " << fd << " end" << endl;
+    }
+    for (std::map<int, FdType>::iterator it = endFdTypeMap.begin(); it != endFdTypeMap.end(); ++it)
+    {
+        int fd = it->first, fd2;
+        FdType type = it->second;
+        ProxyConn *proxyConn = getProxyConn(fd);
+        if (proxyConn)
+        {
+             fd2 = type == SRC ? proxyConn->getDstFd() : proxyConn->getSrcFd();
+        }
+        
+        cout << "try to clean fd: " << fd << endl;
+        
+        if (type == SRC && !proxyConn->getRecvLen())
+        {
+            close(proxyConn);
+            cout << "close proxyConn(" << fd << ", " << fd2 << ")" << endl;
+        }
+        else if (type == DST && !proxyConn->getSendLen())
+        {
+            close(proxyConn);
+            cout << "close proxyConn(" << fd << ", " << fd2 << ")" << endl;
+        }
+        else if (type == UNKNOWN)
+        {
+            ::close(fd);
+        }
+    }
+    cout << "handle events end" << endl << endl;
 }
 
 ProxyConn * HttpProxyServer::setupFdPair(int srcFd, int dstFd)

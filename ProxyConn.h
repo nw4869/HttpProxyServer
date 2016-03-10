@@ -48,12 +48,16 @@ protected:
     virtual ssize_t read(FdType type);
 
     virtual ssize_t write(FdType type);
+    
+    virtual int initHttpsConn();
+
 
 public:
     static const int ERR_BUFF_FULL = -2;
     const size_t MAX_BUFF;
 
 private:
+    const char *RESP_CONNECT = "HTTP/1.1 200 Connection Established\r\n\r\n";
 
     const int srcFd;
     const int dstFd;

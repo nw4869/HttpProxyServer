@@ -36,7 +36,7 @@ int ProxyConn::initHttpsConn()
     {
         sendLen = strlen(RESP_CONNECT);
         strncpy(sendBuff, RESP_CONNECT, sendLen);
-        std::cout << "HTTPS: sendbuf init to " << sendBuff << std::endl;
+//        std::cout << "HTTPS: sendbuf init to " << sendBuff << std::endl;
     }
     else
     {
@@ -68,20 +68,10 @@ ssize_t ProxyConn::read(FdType type)
     if ( (n = ::read(fd, buff + *len, MAX_BUFF - *len))  > 0)
     {
         *len += n;
-        std::string s(buff, std::min(*len, (size_t)256));
-        std::cout << "read: " << s << std::endl;
+//        std::string s(buff, std::min((uint) *len, 256u));
+//        std::cout << "read: " << s << std::endl;
     }
     return n;
-}
-
-ssize_t ProxyConn::readSrc()
-{
-    return read(SRC);
-}
-
-ssize_t ProxyConn::readDst()
-{
-    return read(DST);
 }
 
 ssize_t ProxyConn::write(FdType type)
@@ -101,36 +91,16 @@ ssize_t ProxyConn::write(FdType type)
     if ( (n = ::write(fd, buff, *len)) > 0)
     {
         *len -= n;
-        std::string s(buff, std::min(*len, (size_t)256));
-        std::cout << "write: " << s << std::endl;
+//        std::string s(buff, std::min((uint)n, 256u));
+//        std::cout << "write: " << s << std::endl;
     }
     return n;
-}
-
-ssize_t ProxyConn::writeSrc()
-{
-    return write(SRC);
-}
-
-ssize_t ProxyConn::writeDst()
-{
-    return write(DST);
 }
 
 void ProxyConn::closeAll()
 {
     close(srcFd);
     close(dstFd);
-}
-
-int ProxyConn::getSrcFd() const
-{
-    return srcFd;
-}
-
-int ProxyConn::getDstFd() const
-{
-    return dstFd;
 }
 
 size_t ProxyConn::getRecvLen() const {
@@ -152,16 +122,20 @@ void ProxyConn::setDstReady(int ready)
     dstReady = ready;
 }
 
-ProxyConn::ConnType ProxyConn::getConnType() const
+ConnType ProxyConn::getConnType() const
 {
     return connType;
 }
 
-void ProxyConn::setConnType(ProxyConn::ConnType type)
+void ProxyConn::setConnType(ConnType type)
 {
     connType = type;
     if (connType == HTTPS)
     {
         initHttpsConn();
     }
+}
+
+int ProxyConn::getFd(FdType fdType) const {
+    return fdType == SRC ? srcFd : dstFd;
 }

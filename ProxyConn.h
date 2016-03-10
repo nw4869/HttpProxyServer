@@ -6,29 +6,21 @@
 #define HTTPPROXYSERVER_PROXYCONN_H
 
 #include <sys/types.h>
+#include <string>
+#include "common.h"
 
 struct ProxyConn
 {
-public:
-    enum FdType {UNKNOWN, SRC, DST};
-    enum ConnType {HTTP, HTTPS};
-
 public:
     ProxyConn(const int srcFd, const int dstFd, const ConnType connType=HTTP, const size_t maxBuff=8192);
 
     virtual ~ProxyConn();
 
-    virtual int getSrcFd() const;
+    virtual int getFd(FdType fdType) const;
 
-    virtual int getDstFd() const;
+    virtual ssize_t read(FdType type);
 
-    virtual ssize_t readSrc();
-
-    virtual ssize_t writeSrc();
-
-    virtual ssize_t readDst();
-
-    virtual ssize_t writeDst();
+    virtual ssize_t write(FdType type);
 
     virtual void closeAll();
 
@@ -45,10 +37,6 @@ public:
     virtual void setConnType(ConnType type);
 
 protected:
-    virtual ssize_t read(FdType type);
-
-    virtual ssize_t write(FdType type);
-    
     virtual int initHttpsConn();
 
 

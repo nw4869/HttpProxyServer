@@ -10,12 +10,10 @@
 #include <set>
 #include <sys/epoll.h>
 #include "ProxyConn.h"
+#include "common.h"
 
 
 class HttpProxyServer {
-private:
-    enum FdType {UNKNOWN, SRC, DST} ;
-
 public:
     HttpProxyServer();
 

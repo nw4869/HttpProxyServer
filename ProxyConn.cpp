@@ -8,6 +8,9 @@
 #include <iostream>
 #include <string.h>
 #include <algorithm>
+#include <regex>
+
+using namespace std;
 
 ProxyConn::ProxyConn(int srcFd, int dstFd, ConnType connType, size_t maxBuff)
         : srcFd(srcFd), dstFd(dstFd), connType(connType), MAX_BUFF(maxBuff), dstReady(0)
@@ -47,6 +50,37 @@ int ProxyConn::initHttpsConn()
     return 0;
 }
 
+ssize_t ProxyConn::doRead(int fd, char* buff, size_t len)
+{
+    ssize_t n;
+    if ( (n = ::read(fd, buff, len))  > 0)
+    {
+        // len += n;
+//        std::string s(buff, std::min((uint) *len, 256u));
+//        std::cout << "read: " << s << std::endl;
+        if (fd == srcFd)
+        {
+            if ( connType == HTTP)
+            {
+                string s(buff, len);
+                regex e("(^[A-Z]{3,10} )(http://.{1,4096})(/.{0,4096}? HTTP/\\d\\.\\d\r\n)");
+                s = regex_replace(s, e, "$1$3", regex_constants::format_first_only);
+                if (len != s.size())
+                {
+                    cout << "replace to: " << s << endl;
+                    strncpy(buff, s.c_str(), len);
+                    n= s.size();   
+                }    
+            }
+            recvLen += n;
+        }
+        else
+        {
+            sendLen += n;
+        }
+    }
+}
+
 ssize_t ProxyConn::read(FdType type)
 {
     ssize_t n;
@@ -65,13 +99,15 @@ ssize_t ProxyConn::read(FdType type)
     {
         return ERR_BUFF_FULL;
     }
-    if ( (n = ::read(fd, buff + *len, MAX_BUFF - *len))  > 0)
-    {
-        *len += n;
-//        std::string s(buff, std::min((uint) *len, 256u));
-//        std::cout << "read: " << s << std::endl;
-    }
-    return n;
+
+//     if ( (n = ::read(fd, buff + *len, MAX_BUFF - *len))  > 0)
+//     {
+//         *len += n;
+// //        std::string s(buff, std::min((uint) *len, 256u));
+// //        std::cout << "read: " << s << std::endl;
+//     }
+//     return n;
+    return doRead(fd, buff + *len, MAX_BUFF - *len);
 }
 
 ssize_t ProxyConn::write(FdType type)

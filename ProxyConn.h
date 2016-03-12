@@ -38,6 +38,8 @@ public:
 
 protected:
     virtual int initHttpsConn();
+    
+    virtual ssize_t doRead(int fd, char* buff, size_t len);
 
 
 public:

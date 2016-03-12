@@ -529,7 +529,10 @@ void HttpProxyServer::handleEvents(int epfd, struct epoll_event *events, int lis
         }
         else
         {
-            ::close(fd1);
+            if (type == UNKNOWN)
+            {
+                ::close(fd1);
+            }
             continue;
         }
 
@@ -591,9 +594,13 @@ ProxyConn *HttpProxyServer::getProxyConn(int fd) const
     {
         return srcFd2ProxyConnMap.at(fd);
     }
-    else
+    else if (dstFd2ProxyConnMap.count(fd))
     {
         return dstFd2ProxyConnMap.at(fd);
+    }
+    else
+    {
+        return nullptr;
     }
 }
 

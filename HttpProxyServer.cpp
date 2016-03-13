@@ -149,8 +149,8 @@ int HttpProxyServer::processClient(int srcFd)
     inet_ntop(AF_INET, &clientAddr.sin_addr, ipbuff, sizeof(clientAddr));
     clientPort = ntohs(clientAddr.sin_port);
 
-    cout << endl << "[" << ipbuff << ":" << clientPort << "] "
-        << "connected!" << endl;
+//    cout << endl << "[" << ipbuff << ":" << clientPort << "] "
+//        << "connected!" << endl;
 
     if ((nRead = recv(srcFd, recvbuff, sizeof(recvbuff) - 1, MSG_PEEK)) < 0)
     {
@@ -554,15 +554,16 @@ ProxyConn * HttpProxyServer::setupFdPair(int srcFd, int dstFd)
     ProxyConn *proxyConn = nullptr;
 
     proxyConn = new ProxyConn(srcFd, dstFd);
-    dstFd2ProxyConnMap[dstFd] = proxyConn;
-    srcFd2ProxyConnMap[srcFd] = proxyConn;
+//    dstFd2ProxyConnMap[dstFd] = proxyConn;
+//    srcFd2ProxyConnMap[srcFd] = proxyConn;
+    fd2ProxyConnMap[srcFd] = fd2ProxyConnMap[dstFd] = proxyConn;
     return proxyConn;
 }
 
 void HttpProxyServer::close(ProxyConn *proxyConn)
 {
-    srcFd2ProxyConnMap.erase(proxyConn->getFd(SRC));
-    dstFd2ProxyConnMap.erase(proxyConn->getFd(DST));
+    fd2ProxyConnMap.erase(proxyConn->getFd(SRC));
+    fd2ProxyConnMap.erase(proxyConn->getFd(DST));
     // 描述中close后, 自动在epoll中移除
     proxyConn->closeAll();
     delete proxyConn;
@@ -570,42 +571,35 @@ void HttpProxyServer::close(ProxyConn *proxyConn)
 
 int HttpProxyServer::getOtherSideFd(int fd) const
 {
-    FdType type;
-    if ((type = getFdType(fd)) == SRC)
+    ProxyConn *pc = getProxyConn(fd);
+    if (pc)
     {
-        return srcFd2ProxyConnMap.at(fd)->getFd(DST);
-    }
-    else if (type == DST)
-    {
-        return dstFd2ProxyConnMap.at(fd)->getFd(SRC);
+        return fd == pc->getFd(SRC) ? pc->getFd(DST) : pc->getFd(SRC);
     }
     else
     {
-        return -1;
+        return UNKNOWN;
     }
 }
 
 ProxyConn *HttpProxyServer::getProxyConn(int fd) const
 {
-    if (srcFd2ProxyConnMap.count(fd))
+    try
     {
-        return srcFd2ProxyConnMap.at(fd);
+        return fd2ProxyConnMap.at(fd);
     }
-    else
+    catch (const std::out_of_range &oor)
     {
-        return dstFd2ProxyConnMap.at(fd);
+        return nullptr;
     }
 }
 
 FdType HttpProxyServer::getFdType(int fd) const
 {
-    if (srcFd2ProxyConnMap.count(fd))
+    ProxyConn *pc = getProxyConn(fd);
+    if (pc)
     {
-        return SRC;
-    }
-    else if ( dstFd2ProxyConnMap.count(fd))
-    {
-        return DST;
+        return fd == pc->getFd(SRC) ? SRC : DST;
     }
     else
     {

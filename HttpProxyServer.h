@@ -63,8 +63,7 @@ private:
 
     int epfd;
     int listenfd;
-    std::map<int, ProxyConn*> srcFd2ProxyConnMap;
-    std::map<int, ProxyConn*> dstFd2ProxyConnMap;
+    std::map<int, ProxyConn*> fd2ProxyConnMap;
 };
 
 

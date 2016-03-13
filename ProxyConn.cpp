@@ -14,6 +14,7 @@ using namespace std;
 
 ProxyConn::ProxyConn(int srcFd, int dstFd, ConnType connType, size_t maxBuff)
         : srcFd(srcFd), dstFd(dstFd), connType(connType), MAX_BUFF(maxBuff), dstReady(0)
+        , sendLen(0), recvLen(0)
 {
     recvBuff = new char[MAX_BUFF];
     sendBuff = new char[MAX_BUFF];
@@ -79,6 +80,7 @@ ssize_t ProxyConn::doRead(int fd, char* buff, size_t len)
             sendLen += n;
         }
     }
+    return n;
 }
 
 ssize_t ProxyConn::read(FdType type)

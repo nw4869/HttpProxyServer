@@ -319,6 +319,10 @@ int HttpProxyServer::doRead(int epfd, struct epoll_event event, int fd, FdType t
 
         if (totalRead > 0)
         {
+            // if (type == SRC)
+            {
+                cout << "read fd " << fd << " " << totalRead << endl;
+            }
             // 对端添加EPOLLOUT, 下次写到目标服务器
             ev.events = event.events | EPOLLOUT | EPOLLET;
             ev.data.fd = getOtherSideFd(fd);
@@ -368,19 +372,9 @@ int HttpProxyServer::doWrite(int epfd, struct epoll_event event, int fd, FdType 
     //{
     //    // 处理已经建立连接完成的情况, 
         totalWrite = 0;
-        if (type == SRC)
+        while ( (nwrite = proxyConn->write(type)) > 0)
         {
-            while ( (nwrite = proxyConn->write(SRC)) > 0)
-            {
-                totalWrite += nwrite;
-            }
-        }
-        else
-        {
-            while ( (nwrite = proxyConn->write(DST)) > 0)
-            {
-                totalWrite += nwrite;
-            }
+            totalWrite += nwrite;
         }
 //        cout << "totalWrite: "  << totalWrite << endl;
         if (nwrite == -1 && errno != EWOULDBLOCK)
@@ -393,6 +387,10 @@ int HttpProxyServer::doWrite(int epfd, struct epoll_event event, int fd, FdType 
 
     if (totalWrite > 0 || isNewConn)
     {
+        // if (type == SRC)
+        {
+            cout << "write fd " << fd << " " << totalWrite << endl;
+        }
         //对端添加监听"读"
         ev.events = event.events | EPOLLIN | EPOLLET;
         ev.data.fd = getOtherSideFd(fd);

@@ -73,6 +73,11 @@ int HttpProxyServer::parseDestAddr(const char *line, char *destAddr, char *destP
 {
     int n;
 
+    if (!line || !*line)
+    {
+        return 0;
+    }
+
     if ( (n = sscanf(line, "CONNECT %255[^:]:%5s HTTP/", destAddr, destPort)) <= 0)
     {
         if ( (n = sscanf(line, "%*s %*[^:/]://%255[^:/]:%5[^:/] HTTP/", destAddr, destPort)) <= 0)

@@ -62,15 +62,15 @@ ssize_t ProxyConn::doRead(int fd, char* buff, size_t len)
         {
             if ( connType == HTTP)
             {
-                string s(buff, len);
-                regex e("(^[A-Z]{3,10} )(http://.{1,4096})(/.{0,4096}? HTTP/\\d\\.\\d\r\n)");
-                s = regex_replace(s, e, "$1$3", regex_constants::format_first_only);
-                if (len != s.size())
-                {
-                    cout << "replace to: " << s << endl;
-                    strncpy(buff, s.c_str(), len);
-                    n= s.size();   
-                }    
+//                string s(buff, len);
+//                regex e("(^[A-Z]{3,10} )(http://.{1,4096})(/.{0,4096}? HTTP/\\d\\.\\d\r\n)");
+//                s = regex_replace(s, e, "$1$3", regex_constants::format_first_only);
+//                if (len != s.size())
+//                {
+//                    cout << "replace to: " << s << endl;
+//                    strncpy(buff, s.c_str(), len);
+//                    n= s.size();
+//                }
             }
             recvLen += n;
         }

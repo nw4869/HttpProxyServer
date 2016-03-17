@@ -59,11 +59,12 @@ private:
 private:
     static const int MAX_BUFF = 8192;
     static const int MAX_EVENTS = 10;
-    int listenQ = 1024;
+    static const int LISTEN_Q = 1024;
 
     int epfd;
     int listenfd;
-    std::map<int, ProxyConn*> fd2ProxyConnMap;
+//    std::map<int, ProxyConn*> fd2ProxyConnMap;
+    ProxyConn* fd2ProxyConnMap[LISTEN_Q+3];
 };
 
 

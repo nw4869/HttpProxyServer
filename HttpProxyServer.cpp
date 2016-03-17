@@ -247,7 +247,7 @@ void HttpProxyServer::run(const string &address, const int port)
     listenfd = createServerSocket(address, port);
     this->listenfd = listenfd;
     cout << "listening..." << endl;
-    if (listen(listenfd, listenQ) < 0)
+    if (listen(listenfd, LISTEN_Q) < 0)
     {
         perror("listen error");
         exit(1);
@@ -560,16 +560,14 @@ ProxyConn * HttpProxyServer::setupFdPair(int srcFd, int dstFd)
     ProxyConn *proxyConn = nullptr;
 
     proxyConn = new ProxyConn(srcFd, dstFd);
-//    dstFd2ProxyConnMap[dstFd] = proxyConn;
-//    srcFd2ProxyConnMap[srcFd] = proxyConn;
     fd2ProxyConnMap[srcFd] = fd2ProxyConnMap[dstFd] = proxyConn;
     return proxyConn;
 }
 
 void HttpProxyServer::close(ProxyConn *proxyConn)
 {
-    fd2ProxyConnMap.erase(proxyConn->getFd(SRC));
-    fd2ProxyConnMap.erase(proxyConn->getFd(DST));
+    fd2ProxyConnMap[proxyConn->getFd(SRC)] = nullptr;
+    fd2ProxyConnMap[proxyConn->getFd(DST)] = nullptr;
     // 描述中close后, 自动在epoll中移除
     proxyConn->closeAll();
     delete proxyConn;
@@ -590,14 +588,15 @@ int HttpProxyServer::getOtherSideFd(int fd) const
 
 ProxyConn *HttpProxyServer::getProxyConn(int fd) const
 {
-    try
-    {
-        return fd2ProxyConnMap.at(fd);
-    }
-    catch (const std::out_of_range &oor)
-    {
-        return nullptr;
-    }
+//    try
+//    {
+//        return fd2ProxyConnMap.at(fd);
+//    }
+//    catch (const std::out_of_range &oor)
+//    {
+//        return nullptr;
+//    }
+    return fd2ProxyConnMap[fd];
 }
 
 FdType HttpProxyServer::getFdType(int fd) const

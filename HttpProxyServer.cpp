@@ -18,6 +18,8 @@
 #include <sys/wait.h>
 #include <sys/fcntl.h>
 #include <sys/epoll.h>
+#include <utility>
+#include <pthread.h>
 
 using std::string;
 using std::cout;
@@ -252,6 +254,8 @@ void HttpProxyServer::run(const string &address, const int port)
         perror("listen error");
         exit(1);
     }
+    createThreads();
+    setupProxyConnMutex();
     epollLoop(listenfd);
     ::close(listenfd);
 }
@@ -273,7 +277,7 @@ void HttpProxyServer::setNonBlocking(int sockFd) const
 
 }
 
-int HttpProxyServer::doRead(int epfd, struct epoll_event event, int fd, FdType type)
+int HttpProxyServer::doRead(int fd, FdType type, pthread_mutex_t *mutex)
 {
     ssize_t nread, totalRead;
     struct epoll_event ev;
@@ -291,12 +295,15 @@ int HttpProxyServer::doRead(int epfd, struct epoll_event event, int fd, FdType t
     }
     else
     {
+        pthread_mutex_lock(mutex);
         proxyConn = getProxyConn(fd);
         totalRead = 0;
         while ( (nread = proxyConn->read(type)) > 0)
         {
             totalRead += nread;
         }
+        pthread_mutex_unlock(mutex);
+
 //        cout << "total read: " << totalRead << endl;
         if (nread == ProxyConn::ERR_BUFF_FULL)
         {
@@ -324,7 +331,7 @@ int HttpProxyServer::doRead(int epfd, struct epoll_event event, int fd, FdType t
                 cout << "read fd " << fd << " " << totalRead << endl;
             }
             // 对端添加EPOLLOUT, 下次写到目标服务器
-            ev.events = event.events | EPOLLOUT | EPOLLET;
+            ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
             ev.data.fd = getOtherSideFd(fd);
             if (epoll_ctl(epfd, EPOLL_CTL_MOD, getOtherSideFd(fd), &ev) == -1)
             {
@@ -341,7 +348,7 @@ int HttpProxyServer::doRead(int epfd, struct epoll_event event, int fd, FdType t
     return 0;
 }
 
-int HttpProxyServer::doWrite(int epfd, struct epoll_event event, int fd, FdType type)
+int HttpProxyServer::doWrite(int fd, FdType type, pthread_mutex_t *mutex)
 {
     ssize_t nwrite, totalWrite;
     struct epoll_event ev;
@@ -357,12 +364,12 @@ int HttpProxyServer::doWrite(int epfd, struct epoll_event event, int fd, FdType 
     {
 //        cout << "handle new connection result" << endl;
         isNewConn = 1;
-        if (event.events & EPOLLERR)    //连接失败
-        {
-            cerr << "dst fd: " << fd << " connect failed" << endl;
-            // close(proxyConn);
-            return -1;
-        }
+//        if (event.events & EPOLLERR)    //连接失败
+//        {
+//            cerr << "dst fd: " << fd << " connect failed" << endl;
+//            // close(proxyConn);
+//            return -1;
+//        }
 
         // 连接成功
         cout << "dst fd: " << fd << " connect success" << endl;
@@ -372,10 +379,12 @@ int HttpProxyServer::doWrite(int epfd, struct epoll_event event, int fd, FdType 
     //{
     //    // 处理已经建立连接完成的情况, 
         totalWrite = 0;
+        pthread_mutex_lock(mutex);
         while ( (nwrite = proxyConn->write(type)) > 0)
         {
             totalWrite += nwrite;
         }
+        pthread_mutex_unlock(mutex);
 //        cout << "totalWrite: "  << totalWrite << endl;
         if (nwrite == -1 && errno != EWOULDBLOCK)
         {
@@ -392,7 +401,7 @@ int HttpProxyServer::doWrite(int epfd, struct epoll_event event, int fd, FdType 
             cout << "write fd " << fd << " " << totalWrite << endl;
         }
         //对端添加监听"读"
-        ev.events = event.events | EPOLLIN | EPOLLET;
+        ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
         ev.data.fd = getOtherSideFd(fd);
 //        cout << "otherSideFd: " << fd << " -> " <<ev.data.fd << endl;
         if (epoll_ctl(epfd, EPOLL_CTL_MOD, getOtherSideFd(fd), &ev) == -1)
@@ -410,7 +419,7 @@ int HttpProxyServer::doWrite(int epfd, struct epoll_event event, int fd, FdType 
     return 0;
 }
 
-void HttpProxyServer::handleAccept(int epfd, int listenfd) {
+void HttpProxyServer::handleAccept() {
     struct sockaddr_in cliaddr;
     struct epoll_event ev;
     int connfd;
@@ -466,66 +475,43 @@ void HttpProxyServer::epollLoop(int listenfd)
             exit(EXIT_FAILURE);
         }
 
-        handleEvents(epfd, events, listenfd, nfds);
+        handleEvents(events, nfds);
     }
     ::close(epfd);
 }
 
-void HttpProxyServer::handleEvents(int epfd, struct epoll_event *events, int listenfd, int nfds) {
-    int i, fd, occErr;
-    FdType fdType;
-    std::map<int, FdType> endFdTypeMap;
-    for (i = 0; i < nfds; ++i)
+void HttpProxyServer::handleEvents(struct epoll_event *events, int nfds) {
+    Event event;
+    ProxyConn* proxyConn;
+    int fd;
+    FdType type;
+
+    for (int i = 0; i < nfds; ++i)
     {
-        occErr = 0;
-        fd = events[i].data.fd;
-//        cout << endl << "*handle fd " << fd << " begin: events = " <<  events[i].events << ", type = "
-//            << getFdType(fd) << endl;
-        if (fd == listenfd)
+        event.event = events[i];
+        event.fd = events[i].data.fd;
+        event.fdType = getFdType(event.fd);
+        event.proxyConnMutexs = buffMutexs[getProxyConn(event.fd)->getFd(SRC)];
+
+        if (events[i].events & EPOLLERR)
         {
-//            cout << "handle accept" << endl;
-            handleAccept(epfd, listenfd);
+            cerr << "fd: " << event.fd << " EPOLLERR" << endl;
+            setFdDone(event.fd, event.fdType);
             continue;
         }
 
-        fdType = getFdType(fd);
-        if (events[i].events & EPOLLERR)
-        {
-            cerr << "fd: " << fd << " EPOLLERR" << endl;
-            endFdTypeMap[fd] = fdType;
-            occErr = 1;
-        }
-        if (events[i].events & EPOLLIN && !occErr && !endFdTypeMap.count(fd))
-        {
-//            cout << "handle read" << endl;
-            if ( (occErr = doRead(epfd, events[i], fd, fdType)) < 0)
-            {
-                if (fdType == UNKNOWN)
-                {
-                    ::close(fd);
-//                    cout << "close new fd: " << fd << endl;
-                }
-                else
-                {
-                    endFdTypeMap[fd] = fdType;
-                }
-            }
-        }
-        if (events[i].events & EPOLLOUT && !occErr && !endFdTypeMap.count(fd))
-        {
-//            cout << "handle write" << endl;
-            if (doWrite(epfd, events[i], fd, fdType) < 0)
-            {
-                endFdTypeMap[fd] = fdType;
-            }
-        }
-//        cout << "*handle fd " << fd << " end" << endl;
+        handleEvent(event);
     }
-    for (std::map<int, FdType>::iterator it = endFdTypeMap.begin(); it != endFdTypeMap.end(); ++it)
+
+    pthread_mutex_lock(&doneFdMapMutex);
+    for (std::map<int, FdType>::iterator it = doneFdTypeMap.begin(); it != doneFdTypeMap.end(); ++it)
+//        for (std::pair<int, FdType> &it: doneFdTypeMap)
     {
         int fd1 = it->first, fd2;
-        FdType type = it->second;
-        ProxyConn *proxyConn = getProxyConn(fd1);
+        type = it->second;
+        proxyConn = getProxyConn(fd1);
+
+
         if (proxyConn)
         {
              fd2 = type == SRC ? proxyConn->getFd(DST) : proxyConn->getFd(SRC);
@@ -540,18 +526,34 @@ void HttpProxyServer::handleEvents(int epfd, struct epoll_event *events, int lis
         }
 
 //        cout << "try to clean fd: " << fd1 << endl;
-        
-        if (type == SRC && !proxyConn->getRecvLen())
+
+        if (type == SRC)
         {
-            close(proxyConn);
-            cout << endl << "close proxyConn(" << fd1 << ", " << fd2 << ")" << endl;
+            pthread_mutex_lock(&buffMutexs[fd1][0]);
+            if (!proxyConn->getRecvLen())
+            {
+                pthread_mutex_lock(&buffMutexs[fd1][1]);
+                close(proxyConn);
+                pthread_mutex_unlock(&buffMutexs[fd1][1]);
+                cout << endl << "close proxyConn(" << fd1 << ", " << fd2 << ")" << endl;
+            }
+            pthread_mutex_unlock(&buffMutexs[fd1][0]);
         }
-        else if (type == DST && !proxyConn->getSendLen())
+
+        if (type == DST)
         {
-            close(proxyConn);
-            cout << endl << "close proxyConn(" << fd1 << ", " << fd2 << ")" << endl;
+            pthread_mutex_lock(&buffMutexs[fd2][1]);
+            if (!proxyConn->getRecvLen())
+            {
+                pthread_mutex_lock(&buffMutexs[fd2][0]);
+                close(proxyConn);
+                pthread_mutex_unlock(&buffMutexs[fd2][0]);
+                cout << endl << "close proxyConn(" << fd1 << ", " << fd2 << ")" << endl;
+            }
+            pthread_mutex_unlock(&buffMutexs[fd2][1]);
         }
     }
+    pthread_mutex_unlock(&doneFdMapMutex);
 //    cout << "handle events end" << endl << endl;
 }
 
@@ -588,14 +590,6 @@ int HttpProxyServer::getOtherSideFd(int fd) const
 
 ProxyConn *HttpProxyServer::getProxyConn(int fd) const
 {
-//    try
-//    {
-//        return fd2ProxyConnMap.at(fd);
-//    }
-//    catch (const std::out_of_range &oor)
-//    {
-//        return nullptr;
-//    }
     return fd2ProxyConnMap[fd];
 }
 
@@ -609,5 +603,108 @@ FdType HttpProxyServer::getFdType(int fd) const
     else
     {
         return UNKNOWN;
+    }
+}
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmissing-noreturn"
+void HttpProxyServer::threadMain()
+{
+    Event event;
+    for (; ;)
+    {
+        // 竞争和等待事件
+        pthread_mutex_lock(&evenMutex);
+        while (eventQueueHead == eventQueueTail)
+        {
+            pthread_cond_wait(&eventCond, &evenMutex);
+        }
+        if (++eventQueueHead == MAX_EVENT_Q)
+        {
+            eventQueueHead++;
+        }
+        event = eventQueue[eventQueueHead];
+        pthread_mutex_lock(&evenMutex);
+
+        handleEvent(event);
+    }
+}
+#pragma clang diagnostic pop
+
+void HttpProxyServer::handleEvent(Event event)
+{
+    bool isError = false;
+
+    // handle accept
+    if (event.fd == listenfd)
+    {
+        handleAccept();
+        return ;
+    }
+
+    if ((isError = (bool) (event.event.events & EPOLLERR)))
+    {
+        setFdDone(event.fd, event.fdType);
+        cerr << "fd: " << event.fd << " EPOLLERR" << endl;
+    }
+
+    // handle read
+    if (!isError && event.event.events & EPOLLIN)
+    {
+        pthread_mutex_t mutex =
+                event.fdType == SRC ? event.proxyConnMutexs[0] : event.proxyConnMutexs[1];
+        if ((isError = (bool) doRead(event.fd, event.fdType, &mutex)) < 0)
+        {
+            setFdDone(event.fd, event.fdType);
+        }
+    }
+
+    // handle write
+    if (!isError && event.event.events & EPOLLOUT)
+    {
+        pthread_mutex_t mutex =
+                event.fdType == SRC ? event.proxyConnMutexs[1] : event.proxyConnMutexs[0];
+        if (doWrite(event.fd, event.fdType, &mutex) < 0)
+        {
+            setFdDone(event.fd, event.fdType);
+        }
+    }
+
+}
+
+void HttpProxyServer::setFdDone(int fd, FdType fdType) {
+    if (fdType == UNKNOWN)
+    {
+        ::close(fd);
+    }
+    else
+    {
+        pthread_mutex_lock(&doneFdMapMutex);
+        doneFdTypeMap[fd] = fdType;
+        pthread_mutex_unlock(&doneFdMapMutex);
+    }
+}
+
+int HttpProxyServer::createThreads() {
+    for (int i = 0; i < MAX_THREAD; i++)
+    {
+        if (pthread_create(&threads[i], NULL, hook, this) != 0)
+        {
+            perror("pthread_create");
+            return 0;   // return false
+        }
+    }
+    return 1;
+}
+
+void *HttpProxyServer::hook(void *args) {
+    reinterpret_cast<HttpProxyServer*>(args)->threadMain();
+    return nullptr;
+}
+
+void HttpProxyServer::setupProxyConnMutex() {
+    for (int i = 3; i < LISTEN_Q + 3; i++)
+    {
+        buffMutexs[i][0] = buffMutexs[i][1] = PTHREAD_MUTEX_INITIALIZER;
     }
 }

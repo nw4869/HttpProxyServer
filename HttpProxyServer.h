@@ -9,9 +9,18 @@
 #include <map>
 #include <set>
 #include <sys/epoll.h>
+#include <pthread.h>
 #include "ProxyConn.h"
 #include "common.h"
 
+struct Event {
+    struct epoll_event event;
+    int fd;
+
+    pthread_mutex_t *proxyConnMutexs;
+//    ProxyConn* proxyConn;
+    FdType fdType;
+};
 
 class HttpProxyServer {
 public:
@@ -36,11 +45,11 @@ protected:
 private:
     void setNonBlocking(int sockFd) const;
 
-    int doRead(int epfd, struct epoll_event event, int fd, FdType type);
+    int doRead(int fd, FdType type, pthread_mutex_t *mutex);
 
-    int doWrite(int epfd, struct epoll_event event, int fd, FdType type);
+    int doWrite(int fd, FdType type, pthread_mutex_t *mutex);
 
-    void handleAccept(int epfd, int listenfd);
+    void handleAccept();
 
     void epollLoop(int listenfd);
 
@@ -52,19 +61,43 @@ private:
 
     void close(ProxyConn *proxyConn);
 
-    void handleEvents(int epfd, epoll_event *events, int listenfd, int nfds);
+    void handleEvents(struct epoll_event *events, int nfds);
 
     FdType getFdType(int fd) const;
+
+    static void *hook(void* args);
+
+    void threadMain();
+
+    int createThreads();
+
+    void setupProxyConnMutex();
+
+    void handleEvent(Event event);
+
+    void setFdDone(int fd, FdType fdType);
 
 private:
     static const int MAX_BUFF = 8192;
     static const int MAX_EVENTS = 10;
     static const int LISTEN_Q = 1024;
+    static const int MAX_THREAD = 4;
+    static const int MAX_EVENT_Q = MAX_THREAD * MAX_EVENTS;
 
     int epfd;
     int listenfd;
-//    std::map<int, ProxyConn*> fd2ProxyConnMap;
     ProxyConn* fd2ProxyConnMap[LISTEN_Q+3];
+    pthread_mutex_t buffMutexs[LISTEN_Q+3][2];  //[0]: readbuff, [1] sendbuff
+
+    pthread_t threads[MAX_THREAD];
+
+    int eventQueueHead = 0, eventQueueTail = 0;
+    Event eventQueue[MAX_EVENT_Q];
+    pthread_mutex_t evenMutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_cond_t eventCond = PTHREAD_COND_INITIALIZER;
+
+    std::map<int, FdType> doneFdTypeMap;
+    pthread_mutex_t doneFdMapMutex;
 };
 
 
